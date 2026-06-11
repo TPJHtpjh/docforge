@@ -6,6 +6,7 @@ pub struct DocxConverter;
 
 impl Converter for DocxConverter {
     fn parse_to_ir(&self, _input: &[u8]) -> Result<Document, ConverterError> {
+        
         // Intentionally a structural stub; DOCX XML traversal can be layered in later.
         todo!("Implement specific logic")
     }
