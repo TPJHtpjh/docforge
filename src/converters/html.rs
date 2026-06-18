@@ -151,7 +151,10 @@ fn block_node_from_element(node: &kuchikiki::NodeRef) -> Option<DocNode> {
         "hr" => Some(DocNode::HorizontalRule),
         "div" => {
             let class = element.attributes.borrow();
-            let is_math = class.get("class").map(|v| v.contains("math")).unwrap_or(false);
+            let is_math = class
+                .get("class")
+                .map(|v| v.contains("math"))
+                .unwrap_or(false);
             drop(class);
             if is_math {
                 let text = node.text_contents();
@@ -390,7 +393,10 @@ fn inline_node_from_child(node: &kuchikiki::NodeRef) -> Option<InlineNode> {
         "br" => Some(InlineNode::HardBreak),
         "span" => {
             let attrs = element.attributes.borrow();
-            let is_math = attrs.get("class").map(|v| v.contains("math")).unwrap_or(false);
+            let is_math = attrs
+                .get("class")
+                .map(|v| v.contains("math"))
+                .unwrap_or(false);
             drop(attrs);
             if is_math {
                 let text = node.text_contents();

@@ -65,12 +65,7 @@ fn parse_doc_node<'a>(node: &'a AstNode<'a>) -> Option<DocNode> {
             let ordered = matches!(list.list_type, ListType::Ordered);
             let items: Vec<Vec<DocNode>> = node
                 .children()
-                .map(|item_node| {
-                    item_node
-                        .children()
-                        .filter_map(parse_doc_node)
-                        .collect()
-                })
+                .map(|item_node| item_node.children().filter_map(parse_doc_node).collect())
                 .collect();
             Some(DocNode::List { ordered, items })
         }
@@ -238,7 +233,11 @@ fn render_node_to_string(node: &DocNode) -> String {
             output.push_str(&header_line);
             output.push('\n');
 
-            let separator_line = headers.iter().map(|_| "---").collect::<Vec<_>>().join(" | ");
+            let separator_line = headers
+                .iter()
+                .map(|_| "---")
+                .collect::<Vec<_>>()
+                .join(" | ");
             output.push_str(&separator_line);
             output.push('\n');
 

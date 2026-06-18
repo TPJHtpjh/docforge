@@ -60,7 +60,10 @@ fn markdown_ir_round_trips() {
             panic!("expected text output");
         };
 
-        assert!(!output.is_empty(), "output should not be empty for: {input}");
+        assert!(
+            !output.is_empty(),
+            "output should not be empty for: {input}"
+        );
     }
 }
 
@@ -176,7 +179,10 @@ fn html_parses_list() {
         .expect("should parse list");
 
     assert_eq!(doc.nodes.len(), 1);
-    assert!(matches!(&doc.nodes[0], DocNode::List { ordered: false, .. }));
+    assert!(matches!(
+        &doc.nodes[0],
+        DocNode::List { ordered: false, .. }
+    ));
 }
 
 #[test]
