@@ -9,7 +9,11 @@ pub struct MarkdownConverter;
 
 impl MarkdownConverter {
     pub fn markdown_to_html(input: &str) -> String {
-        comrak::markdown_to_html(input, &Options::default())
+        let mut options = Options::default();
+        options.extension.table = true;
+        options.extension.strikethrough = true;
+        options.extension.tasklist = true;
+        comrak::markdown_to_html(input, &options)
     }
 }
 
@@ -17,7 +21,11 @@ impl Converter for MarkdownConverter {
     fn parse_to_ir(&self, input: &[u8]) -> Result<Document, ConverterError> {
         let source = std::str::from_utf8(input).map_err(|_| ConverterError::InvalidUtf8)?;
         let arena = Arena::new();
-        let root = comrak::parse_document(&arena, source, &Options::default());
+        let mut options = Options::default();
+        options.extension.table = true;
+        options.extension.strikethrough = true;
+        options.extension.tasklist = true;
+        let root = comrak::parse_document(&arena, source, &options);
 
         let nodes: Vec<DocNode> = root.children().filter_map(parse_doc_node).collect();
         Ok(Document::new(nodes))
@@ -137,6 +145,26 @@ fn collect_inlines<'a>(node: &'a AstNode<'a>) -> Vec<InlineNode> {
                     url: link.url.clone(),
                 });
             }
+            NodeValue::Image(img) => {
+                let alt = collect_inlines(child);
+                let alt_text = if alt.is_empty() {
+                    String::new()
+                } else {
+                    // Extract plain text from inline nodes
+                    alt.iter().fold(String::new(), |mut acc, node| {
+                        if let InlineNode::Text(t) = node {
+                            acc.push_str(t);
+                        }
+                        acc
+                    })
+                };
+                result.push(InlineNode::InlineImage {
+                    id: alt_text,
+                    data: img.url.clone(),
+                    width: None,
+                    height: None,
+                });
+            }
             NodeValue::Math(math) => {
                 if math.display_math {
                     // Block math inside inline context — wrap as inline fallback
@@ -225,28 +253,47 @@ fn render_node_to_string(node: &DocNode) -> String {
             output.push('\n');
         }
         DocNode::Table { headers, rows } => {
-            let header_line = headers
-                .iter()
-                .map(|cell| render_inlines(cell))
-                .collect::<Vec<_>>()
-                .join(" | ");
-            output.push_str(&header_line);
-            output.push('\n');
+            let mut actual_headers = headers.clone();
+            let mut actual_rows = rows.clone();
 
-            let separator_line = headers
-                .iter()
-                .map(|_| "---")
-                .collect::<Vec<_>>()
-                .join(" | ");
-            output.push_str(&separator_line);
-            output.push('\n');
+            if actual_headers.is_empty() && !actual_rows.is_empty() {
+                // If there are no headers, we must use the first row as the header
+                // because Markdown requires a header row for tables.
+                actual_headers = actual_rows.remove(0);
+            }
 
-            for row in rows {
-                let row_line = row
-                    .iter()
-                    .map(|cell| render_inlines(cell))
-                    .collect::<Vec<_>>()
-                    .join(" | ");
+            if !actual_headers.is_empty() {
+                let header_line = format!(
+                    "| {} |",
+                    actual_headers
+                        .iter()
+                        .map(|cell| render_inlines(cell))
+                        .collect::<Vec<_>>()
+                        .join(" | ")
+                );
+                output.push_str(&header_line);
+                output.push('\n');
+
+                let separator_line = format!(
+                    "|{}|",
+                    actual_headers
+                        .iter()
+                        .map(|_| "---")
+                        .collect::<Vec<_>>()
+                        .join("|")
+                );
+                output.push_str(&separator_line);
+                output.push('\n');
+            }
+
+            for row in actual_rows {
+                let row_line = format!(
+                    "| {} |",
+                    row.iter()
+                        .map(|cell| render_inlines(cell))
+                        .collect::<Vec<_>>()
+                        .join(" | ")
+                );
                 output.push_str(&row_line);
                 output.push('\n');
             }
@@ -282,7 +329,7 @@ fn render_inlines(inlines: &[InlineNode]) -> String {
             InlineNode::Strong(children) => {
                 output.push_str("**");
                 output.push_str(&render_inlines(children));
-                output.push_str("**");
+                output.push_str("** ");
             }
             InlineNode::Strikethrough(children) => {
                 output.push_str("~~");
@@ -301,6 +348,13 @@ fn render_inlines(inlines: &[InlineNode]) -> String {
                 output.push('$');
                 output.push_str(code);
                 output.push('$');
+            }
+            InlineNode::InlineImage { id, data, .. } => {
+                output.push_str("![");
+                output.push_str(id);
+                output.push_str("](data:image/png;base64,");
+                output.push_str(data);
+                output.push(')');
             }
         }
     }

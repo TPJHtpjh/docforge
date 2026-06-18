@@ -2,3 +2,7 @@
 
 # Keep Cargo.lock for binaries; uncomment the next line if converting to a library-only crate.
 # Cargo.lock
+
+# Ignore all files in tests/ except conversion_flow.rs
+tests/*
+!tests/conversion_flow.rs

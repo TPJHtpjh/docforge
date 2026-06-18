@@ -106,8 +106,15 @@ fn parse_root_block_children(document: &kuchikiki::NodeRef) -> Vec<DocNode> {
 fn parse_block_children(container: &kuchikiki::NodeRef) -> Vec<DocNode> {
     let mut nodes = Vec::new();
     for child in container.children() {
-        if let Some(node) = block_node_from_element(&child) {
-            nodes.push(node);
+        if child.as_text().is_some() {
+            let text = child.text_contents();
+            if !text.trim().is_empty() {
+                nodes.push(DocNode::Paragraph {
+                    content: vec![InlineNode::Text(text.trim().to_string())],
+                });
+            }
+        } else {
+            nodes.extend(block_nodes_from_element(&child));
         }
     }
     nodes
@@ -115,8 +122,11 @@ fn parse_block_children(container: &kuchikiki::NodeRef) -> Vec<DocNode> {
 
 /// Convert a DOM node to `DocNode` if it is a recognized block-level element.
 /// Unknown elements fall back to a Paragraph preserving their text content.
-fn block_node_from_element(node: &kuchikiki::NodeRef) -> Option<DocNode> {
-    let element = node.as_element()?;
+fn block_nodes_from_element(node: &kuchikiki::NodeRef) -> Vec<DocNode> {
+    let element = match node.as_element() {
+        Some(e) => e,
+        None => return Vec::new(),
+    };
     let tag = element.name.local.as_ref();
 
     match tag {
@@ -130,25 +140,25 @@ fn block_node_from_element(node: &kuchikiki::NodeRef) -> Option<DocNode> {
                 _ => 6,
             };
             let content = collect_inline_children(node);
-            Some(DocNode::Heading { level, content })
+            vec![DocNode::Heading { level, content }]
         }
         "p" => {
             let content = collect_inline_children(node);
             if content.is_empty() {
-                None
+                vec![]
             } else {
-                Some(DocNode::Paragraph { content })
+                vec![DocNode::Paragraph { content }]
             }
         }
-        "pre" => parse_code_block(node),
+        "pre" => parse_code_block(node).into_iter().collect(),
         "blockquote" => {
             let content = parse_block_children(node);
-            Some(DocNode::BlockQuote { content })
+            vec![DocNode::BlockQuote { content }]
         }
-        "ul" => Some(parse_list(node, false)),
-        "ol" => Some(parse_list(node, true)),
-        "table" => Some(parse_table(node)),
-        "hr" => Some(DocNode::HorizontalRule),
+        "ul" => vec![parse_list(node, false)],
+        "ol" => vec![parse_list(node, true)],
+        "table" => vec![parse_table(node)],
+        "hr" => vec![DocNode::HorizontalRule],
         "div" => {
             let class = element.attributes.borrow();
             let is_math = class
@@ -158,9 +168,9 @@ fn block_node_from_element(node: &kuchikiki::NodeRef) -> Option<DocNode> {
             drop(class);
             if is_math {
                 let text = node.text_contents();
-                Some(DocNode::MathBlock {
+                vec![DocNode::MathBlock {
                     code: text.trim().to_string(),
-                })
+                }]
             } else {
                 fallback_block_container(node)
             }
@@ -171,42 +181,64 @@ fn block_node_from_element(node: &kuchikiki::NodeRef) -> Option<DocNode> {
         }
         // Unknown block-level elements: preserve as Paragraph to avoid data loss
         _ => {
-            let text = node.text_contents().trim().to_string();
-            if text.is_empty() {
-                None
+            let content = collect_inline_children(node);
+            if content.is_empty() {
+                vec![]
             } else {
-                Some(DocNode::Paragraph {
-                    content: vec![InlineNode::Text(text)],
-                })
+                vec![DocNode::Paragraph { content }]
             }
         }
     }
 }
 
-/// For container elements: try to parse block children; if nothing recognized
-/// or too many children, fall back to raw text as a Paragraph.
-fn fallback_block_container(node: &kuchikiki::NodeRef) -> Option<DocNode> {
-    let children = parse_block_children(node);
-    if children.len() == 1 {
-        return children.into_iter().next();
-    }
-    if children.len() > 1 {
-        // Multiple recognized children — flatten text into a single Paragraph
-        let text = node.text_contents().trim().to_string();
-        if !text.is_empty() {
-            return Some(DocNode::Paragraph {
-                content: vec![InlineNode::Text(text)],
-            });
+/// Helper: Check if a node has any child elements that are recognized as blocks.
+fn has_block_elements(node: &kuchikiki::NodeRef) -> bool {
+    for child in node.children() {
+        if let Some(el) = child.as_element() {
+            let tag = el.name.local.as_ref();
+            if matches!(
+                tag,
+                "h1" | "h2"
+                    | "h3"
+                    | "h4"
+                    | "h5"
+                    | "h6"
+                    | "p"
+                    | "pre"
+                    | "blockquote"
+                    | "ul"
+                    | "ol"
+                    | "table"
+                    | "hr"
+                    | "div"
+                    | "section"
+                    | "article"
+                    | "main"
+                    | "header"
+                    | "footer"
+                    | "nav"
+                    | "aside"
+            ) {
+                return true;
+            }
         }
     }
-    // No recognized block children; use raw text content if present
-    let text = node.text_contents().trim().to_string();
-    if text.is_empty() {
-        None
+    false
+}
+
+/// For container elements: try to parse block children; if nothing recognized
+/// or too many children, fall back to raw text as a Paragraph.
+fn fallback_block_container(node: &kuchikiki::NodeRef) -> Vec<DocNode> {
+    if has_block_elements(node) {
+        let children = parse_block_children(node);
+        return children;
+    }
+
+    let content = collect_inline_children(node);
+    if content.is_empty() {
+        Vec::new()
     } else {
-        Some(DocNode::Paragraph {
-            content: vec![InlineNode::Text(text)],
-        })
+        vec![DocNode::Paragraph { content }]
     }
 }
 
@@ -391,6 +423,22 @@ fn inline_node_from_child(node: &kuchikiki::NodeRef) -> Option<InlineNode> {
             })
         }
         "br" => Some(InlineNode::HardBreak),
+        "img" => {
+            let attrs = element.attributes.borrow();
+            let src = attrs.get("src").unwrap_or("").to_string();
+            let alt = attrs.get("alt").unwrap_or("").to_string();
+            drop(attrs);
+            if src.is_empty() {
+                None
+            } else {
+                Some(InlineNode::InlineImage {
+                    id: alt,
+                    data: src,
+                    width: None,
+                    height: None,
+                })
+            }
+        }
         "span" => {
             let attrs = element.attributes.borrow();
             let is_math = attrs
@@ -482,6 +530,25 @@ fn render_inline_nodes(inlines: &[InlineNode]) -> String {
                 output.push_str("<del>");
                 output.push_str(&render_inline_nodes(children));
                 output.push_str("</del>");
+            }
+            InlineNode::InlineImage {
+                id,
+                data,
+                width,
+                height,
+            } => {
+                output.push_str("<img src=\"data:image/png;base64,");
+                output.push_str(data);
+                output.push('"');
+                if let Some(w) = width {
+                    output.push_str(&format!(" width=\"{w}\""));
+                }
+                if let Some(h) = height {
+                    output.push_str(&format!(" height=\"{h}\""));
+                }
+                output.push_str(" alt=\"");
+                output.push_str(id);
+                output.push_str("\" />");
             }
         }
     }

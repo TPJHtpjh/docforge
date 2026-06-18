@@ -58,7 +58,10 @@ pub enum InlineNode {
     Emphasis(Vec<InlineNode>),
     Strong(Vec<InlineNode>),
     Code(String),
-    Link { text: Vec<InlineNode>, url: String },
+    Link {
+        text: Vec<InlineNode>,
+        url: String,
+    },
     // 行内代码：`code`
     // 数学公式：$ ... $
     MathInline(String),
@@ -66,4 +69,11 @@ pub enum InlineNode {
     Strikethrough(Vec<InlineNode>),
     SoftBreak,
     HardBreak,
+    // 内联图片：DOCX 中的图片以 base64 编码存储在 IR 中
+    InlineImage {
+        id: String,
+        data: String, // base64 encoded image data
+        width: Option<u32>,
+        height: Option<u32>,
+    },
 }
