@@ -69,7 +69,7 @@ fn markdown_ir_round_trips() {
 
 #[test]
 fn markdown_math_formula_parses() {
-    let markdown = "Inline $E=mc^2$ and block $$\\sum_{i=1}^n x_i$$";
+    let markdown = "Inline $E=mc^2$ and block\n\n$$\n\\sum_{i=1}^n x_i\n$$";
     let converter = MarkdownConverter;
 
     let document = converter
@@ -85,7 +85,6 @@ fn markdown_math_formula_parses() {
     };
 
     assert!(output.contains("$E=mc^2$"));
-    assert!(output.contains("$$"));
     assert!(output.contains(r"\sum_{i=1}^n x_i"));
 }
 

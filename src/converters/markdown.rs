@@ -13,6 +13,7 @@ impl MarkdownConverter {
         options.extension.table = true;
         options.extension.strikethrough = true;
         options.extension.tasklist = true;
+        options.extension.dollar_math = true;
         comrak::markdown_to_html(input, &options)
     }
 }
@@ -25,6 +26,7 @@ impl Converter for MarkdownConverter {
         options.extension.table = true;
         options.extension.strikethrough = true;
         options.extension.tasklist = true;
+        options.extension.dollar_math = true;
         let root = comrak::parse_document(&arena, source, &options);
 
         let nodes: Vec<DocNode> = root.children().filter_map(parse_doc_node).collect();
