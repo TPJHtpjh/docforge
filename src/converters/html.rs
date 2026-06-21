@@ -248,23 +248,23 @@ fn parse_code_block(pre_node: &kuchikiki::NodeRef) -> Option<DocNode> {
     let code_text: String;
 
     for child in pre_node.children() {
-        if let Some(el) = child.as_element() {
-            if el.name.local.as_ref() == "code" {
-                let attrs = el.attributes.borrow();
-                if let Some(class_val) = attrs.get("class") {
-                    for part in class_val.split_whitespace() {
-                        if let Some(lang) = part.strip_prefix("language-") {
-                            language = Some(lang.to_string());
-                            break;
-                        }
+        if let Some(el) = child.as_element()
+            && el.name.local.as_ref() == "code"
+        {
+            let attrs = el.attributes.borrow();
+            if let Some(class_val) = attrs.get("class") {
+                for part in class_val.split_whitespace() {
+                    if let Some(lang) = part.strip_prefix("language-") {
+                        language = Some(lang.to_string());
+                        break;
                     }
                 }
-                code_text = child.text_contents();
-                return Some(DocNode::CodeBlock {
-                    language,
-                    code: code_text.trim().to_string(),
-                });
             }
+            code_text = child.text_contents();
+            return Some(DocNode::CodeBlock {
+                language,
+                code: code_text.trim().to_string(),
+            });
         }
     }
 
@@ -385,6 +385,16 @@ fn trim_whitespace_edges(inlines: &mut Vec<InlineNode>) {
     }
 }
 
+/// Parse a pixel-like dimension from an HTML attribute value, ignoring units.
+fn parse_dimension(value: &str) -> Option<u32> {
+    value
+        .trim()
+        .split(|c: char| !c.is_ascii_digit())
+        .next()?
+        .parse()
+        .ok()
+}
+
 /// Convert a single DOM child node to an InlineNode, or None if not inline content.
 fn inline_node_from_child(node: &kuchikiki::NodeRef) -> Option<InlineNode> {
     if let Some(text_ref) = node.as_text() {
@@ -427,6 +437,8 @@ fn inline_node_from_child(node: &kuchikiki::NodeRef) -> Option<InlineNode> {
             let attrs = element.attributes.borrow();
             let src = attrs.get("src").unwrap_or("").to_string();
             let alt = attrs.get("alt").unwrap_or("").to_string();
+            let width = attrs.get("width").and_then(parse_dimension);
+            let height = attrs.get("height").and_then(parse_dimension);
             drop(attrs);
             if src.is_empty() {
                 None
@@ -434,8 +446,8 @@ fn inline_node_from_child(node: &kuchikiki::NodeRef) -> Option<InlineNode> {
                 Some(InlineNode::InlineImage {
                     id: alt,
                     data: src,
-                    width: None,
-                    height: None,
+                    width,
+                    height,
                 })
             }
         }
@@ -553,11 +565,15 @@ fn render_inline_nodes(inlines: &[InlineNode]) -> String {
                     output.push_str(data);
                 }
                 output.push('"');
+                // DOCX stores sizes in EMU (English Metric Units); HTML expects pixels.
+                // 1 px = 9525 EMU at 96 DPI. Values above 10_000 are treated as EMU.
                 if let Some(w) = width {
-                    output.push_str(&format!(" width=\"{w}\""));
+                    let px = if *w > 10_000 { emu_to_px(*w) } else { *w };
+                    output.push_str(&format!(" width=\"{px}\""));
                 }
                 if let Some(h) = height {
-                    output.push_str(&format!(" height=\"{h}\""));
+                    let px = if *h > 10_000 { emu_to_px(*h) } else { *h };
+                    output.push_str(&format!(" height=\"{px}\""));
                 }
                 output.push_str(" alt=\"");
                 output.push_str(id);
@@ -567,6 +583,13 @@ fn render_inline_nodes(inlines: &[InlineNode]) -> String {
     }
 
     output
+}
+
+/// Convert EMU (English Metric Units) to CSS pixels.
+/// 1 inch = 914_400 EMU, and CSS uses 96 px per inch, so 1 px = 9525 EMU.
+fn emu_to_px(emu: u32) -> u32 {
+    let px = emu as f64 / 9525.0;
+    px.round().max(1.0) as u32
 }
 
 fn escape_html(value: &str) -> String {

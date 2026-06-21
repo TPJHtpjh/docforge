@@ -91,7 +91,7 @@ fn parse_block_node<'a>(node: &'a AstNode<'a>) -> Option<DocNode> {
                 };
                 let cells: Vec<Vec<InlineNode>> = row_node
                     .children()
-                    .map(|cell| collect_inlines(&cell))
+                    .map(|cell| collect_inlines(cell))
                     .collect();
                 if is_header {
                     headers = cells;
@@ -385,10 +385,9 @@ fn render_inlines(inlines: &[InlineNode]) -> String {
                 output.push('$');
             }
             InlineNode::InlineImage { id, data, .. } => {
-                output.push_str("![");
-                output.push_str(id);
-                output.push('(');
-                // Detect if data is already a URL or raw base64
+                // Use <img> tag because standard Markdown ![](data:...)
+                // is not supported by most renderers for data URIs.
+                output.push_str("<img src=\"");
                 if data.starts_with("http://")
                     || data.starts_with("https://")
                     || data.starts_with("data:")
@@ -400,7 +399,9 @@ fn render_inlines(inlines: &[InlineNode]) -> String {
                     output.push_str("data:image/png;base64,");
                     output.push_str(data);
                 }
-                output.push(')');
+                output.push_str("\" alt=\"");
+                output.push_str(id);
+                output.push_str("\" />");
             }
         }
     }

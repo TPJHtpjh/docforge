@@ -54,7 +54,7 @@ impl Converter for DocxConverter {
             let style_name = format!("Heading{level}");
             docx = docx.add_style(
                 docx_rs::Style::new(&style_name, docx_rs::StyleType::Paragraph)
-                    .name(&format!("Heading {level}"))
+                    .name(format!("Heading {level}"))
                     .bold()
                     .size((32 - level as u32 * 4) as usize),
             );
@@ -240,23 +240,22 @@ fn parse_run(data: &serde_json::Value, images: &[&serde_json::Value]) -> Option<
 
     // Check if this run contains a drawing (image) — if so, return the image directly
     for child in children {
-        if child.get("type").and_then(|t| t.as_str()) == Some("drawing") {
-            if let Some(img) = parse_drawing(child.get("data").unwrap_or(child), images) {
-                return Some(img);
-            }
+        if child.get("type").and_then(|t| t.as_str()) == Some("drawing")
+            && let Some(img) = parse_drawing(child.get("data").unwrap_or(child), images)
+        {
+            return Some(img);
         }
     }
 
     let mut text = String::new();
     for child in children {
-        if child.get("type").and_then(|t| t.as_str()) == Some("text") {
-            if let Some(t) = child
+        if child.get("type").and_then(|t| t.as_str()) == Some("text")
+            && let Some(t) = child
                 .get("data")
                 .and_then(|d| d.get("text"))
                 .and_then(|t| t.as_str())
-            {
-                text.push_str(t);
-            }
+        {
+            text.push_str(t);
         }
     }
 
@@ -341,16 +340,7 @@ fn parse_drawing(data: &serde_json::Value, images: &[&serde_json::Value]) -> Opt
     })?;
 
     let arr = image_entry.as_array()?;
-    
-    // DEBUG: log image entry structure
-    eprintln!("[DEBUG parse_drawing] id={}, arr.len={}, arr[1]={:?}, arr[2].len={}, arr[3].len={}",
-        id,
-        arr.len(),
-        arr.get(1).and_then(|v| v.as_str()).unwrap_or(""),
-        arr.get(2).and_then(|v| v.as_str()).map(|s| s.len()).unwrap_or(0),
-        arr.get(3).and_then(|v| v.as_str()).map(|s| s.len()).unwrap_or(0),
-    );
-    
+
     let image_b64 = arr
         .get(3)
         .and_then(|v| v.as_str())
@@ -462,7 +452,7 @@ fn inlines_to_runs(inlines: &[InlineNode]) -> Vec<docx_rs::Run> {
             }
             InlineNode::Link { text, url: _ } => {
                 let link_run = docx_rs::Run::new()
-                    .add_text(&extract_text_from_runs(text))
+                    .add_text(extract_text_from_runs(text))
                     .color("0563C1")
                     .underline("single");
                 runs.push(link_run);
