@@ -105,43 +105,23 @@ impl Converter for DocxConverter {
                     docx = docx.add_paragraph(para);
                 }
                 DocNode::BlockQuote { content } => {
-                    for inner_node in content {
-                        if let DocNode::Paragraph { content } = inner_node {
-                            let runs = inlines_to_runs(content);
-                            let mut para =
-                                docx_rs::Paragraph::new().indent(None, None, Some(720), None);
-                            for run in runs {
-                                para = para.add_run(run);
-                            }
-                            docx = docx.add_paragraph(para);
-                        }
-                    }
+                    docx = render_blockquote(docx, content, 0);
                 }
                 DocNode::List { ordered, items } => {
-                    for (idx, item) in items.iter().enumerate() {
-                        for node in item {
-                            if let DocNode::Paragraph { content } = node {
-                                let prefix = if *ordered {
-                                    format!("{}. ", idx + 1)
-                                } else {
-                                    "• ".to_string()
-                                };
-                                let mut para = docx_rs::Paragraph::new()
-                                    .add_run(docx_rs::Run::new().add_text(&prefix));
-                                for run in inlines_to_runs(content) {
-                                    para = para.add_run(run);
-                                }
-                                docx = docx.add_paragraph(para);
-                            }
-                        }
-                    }
+                    docx = render_list(docx, items, *ordered, 0);
                 }
                 DocNode::Table { headers, rows } => {
                     docx = render_table(docx, headers, rows);
                 }
                 DocNode::HorizontalRule => {
-                    let run = docx_rs::Run::new().add_text("─".repeat(50)).color("CCCCCC");
-                    docx = docx.add_paragraph(docx_rs::Paragraph::new().add_run(run));
+                    // Render as a thin bottom-border paragraph (visual horizontal rule)
+                    let mut para = docx_rs::Paragraph::new();
+                    let run = docx_rs::Run::new()
+                        .add_text("─".repeat(50))
+                        .color("999999")
+                        .size(18);
+                    para = para.add_run(run);
+                    docx = docx.add_paragraph(para);
                 }
                 DocNode::MathBlock { code } => {
                     // Render math block with Cambria Math font for proper math display
@@ -361,6 +341,16 @@ fn parse_drawing(data: &serde_json::Value, images: &[&serde_json::Value]) -> Opt
     })?;
 
     let arr = image_entry.as_array()?;
+    
+    // DEBUG: log image entry structure
+    eprintln!("[DEBUG parse_drawing] id={}, arr.len={}, arr[1]={:?}, arr[2].len={}, arr[3].len={}",
+        id,
+        arr.len(),
+        arr.get(1).and_then(|v| v.as_str()).unwrap_or(""),
+        arr.get(2).and_then(|v| v.as_str()).map(|s| s.len()).unwrap_or(0),
+        arr.get(3).and_then(|v| v.as_str()).map(|s| s.len()).unwrap_or(0),
+    );
+    
     let image_b64 = arr
         .get(3)
         .and_then(|v| v.as_str())
@@ -603,6 +593,181 @@ fn render_table(
             .set_grid(col_widths)
             .style("TableGrid"),
     )
+}
+
+/// Render a blockquote with proper indentation and support for nested content.
+fn render_blockquote(docx: docx_rs::Docx, content: &[DocNode], depth: i32) -> docx_rs::Docx {
+    let indent = 720 + depth * 360; // increasing indent per depth level
+    let mut docx = docx;
+
+    for node in content {
+        match node {
+            DocNode::Paragraph { content } => {
+                if content.is_empty() {
+                    // Empty paragraph in blockquote — render as empty indented line
+                    let para = docx_rs::Paragraph::new().indent(None, None, Some(indent), None);
+                    docx = docx.add_paragraph(para);
+                } else {
+                    let runs = inlines_to_runs(content);
+                    let mut para = docx_rs::Paragraph::new().indent(None, None, Some(indent), None);
+                    for run in runs {
+                        para = para.add_run(run);
+                    }
+                    docx = docx.add_paragraph(para);
+                }
+            }
+            DocNode::List { ordered, items } => {
+                // List inside blockquote — render with additional indent
+                docx = render_list(docx, items, *ordered, depth + 1);
+            }
+            DocNode::BlockQuote { content: nested } => {
+                // Nested blockquote — recurse
+                docx = render_blockquote(docx, nested, depth + 1);
+            }
+            DocNode::CodeBlock { code, .. } => {
+                let mut para = docx_rs::Paragraph::new().indent(None, None, Some(indent), None);
+                let shading = docx_rs::Shading::new().color("auto").fill("F0F0F0");
+                let run = docx_rs::Run::new()
+                    .add_text(code)
+                    .fonts(docx_rs::RunFonts::new().ascii("Consolas"))
+                    .size(20)
+                    .shading(shading);
+                para = para.add_run(run);
+                docx = docx.add_paragraph(para);
+            }
+            DocNode::HorizontalRule => {
+                let run = docx_rs::Run::new().add_text("─".repeat(40)).color("999999");
+                let para = docx_rs::Paragraph::new()
+                    .indent(None, None, Some(indent), None)
+                    .add_run(run);
+                docx = docx.add_paragraph(para);
+            }
+            // For any other node type, try to render as paragraph
+            DocNode::Heading { content, .. } => {
+                let runs = inlines_to_runs(content);
+                let mut para = docx_rs::Paragraph::new().indent(None, None, Some(indent), None);
+                for run in runs {
+                    para = para.add_run(run.bold());
+                }
+                docx = docx.add_paragraph(para);
+            }
+            DocNode::Table { headers, rows } => {
+                docx = render_table(docx, headers, rows);
+            }
+            DocNode::MathBlock { code } => {
+                let run = docx_rs::Run::new()
+                    .add_text(code)
+                    .fonts(docx_rs::RunFonts::new().ascii("Cambria Math"))
+                    .size(24);
+                let para = docx_rs::Paragraph::new()
+                    .indent(None, None, Some(indent), None)
+                    .add_run(run);
+                docx = docx.add_paragraph(para);
+            }
+        }
+    }
+    docx
+}
+
+/// Render a list with support for nested lists and proper indentation.
+fn render_list(
+    docx: docx_rs::Docx,
+    items: &[Vec<DocNode>],
+    ordered: bool,
+    depth: i32,
+) -> docx_rs::Docx {
+    let mut docx = docx;
+    let base_indent = 720 + depth * 360;
+    let hanging_indent = 360;
+
+    for (idx, item) in items.iter().enumerate() {
+        for node in item {
+            match node {
+                DocNode::Paragraph { content } => {
+                    let prefix = if ordered {
+                        format!("{}.", idx + 1)
+                    } else {
+                        "•".to_string()
+                    };
+                    let mut para = docx_rs::Paragraph::new().indent(
+                        None,
+                        None,
+                        Some(base_indent),
+                        Some(hanging_indent),
+                    );
+                    para = para.add_run(docx_rs::Run::new().add_text(&prefix));
+                    if !content.is_empty() {
+                        para = para.add_run(docx_rs::Run::new().add_text(" "));
+                        for run in inlines_to_runs(content) {
+                            para = para.add_run(run);
+                        }
+                    }
+                    docx = docx.add_paragraph(para);
+                }
+                DocNode::List {
+                    ordered: nested_ordered,
+                    items: nested_items,
+                } => {
+                    // Nested list — recurse with increased depth
+                    docx = render_list(docx, nested_items, *nested_ordered, depth + 1);
+                }
+                // For any other node in a list item, render as a regular paragraph with indent
+                DocNode::Heading { content, .. } => {
+                    let runs = inlines_to_runs(content);
+                    let mut para = docx_rs::Paragraph::new().indent(
+                        None,
+                        None,
+                        Some(base_indent + hanging_indent),
+                        None,
+                    );
+                    for run in runs {
+                        para = para.add_run(run.bold());
+                    }
+                    docx = docx.add_paragraph(para);
+                }
+                DocNode::BlockQuote { content: nested } => {
+                    docx = render_blockquote(docx, nested, depth + 1);
+                }
+                DocNode::Table { headers, rows } => {
+                    docx = render_table(docx, headers, rows);
+                }
+                DocNode::MathBlock { code } => {
+                    let run = docx_rs::Run::new()
+                        .add_text(code)
+                        .fonts(docx_rs::RunFonts::new().ascii("Cambria Math"))
+                        .size(24);
+                    let para = docx_rs::Paragraph::new()
+                        .indent(None, None, Some(base_indent + hanging_indent), None)
+                        .add_run(run);
+                    docx = docx.add_paragraph(para);
+                }
+                DocNode::CodeBlock { code, .. } => {
+                    let mut para = docx_rs::Paragraph::new().indent(
+                        None,
+                        None,
+                        Some(base_indent + hanging_indent),
+                        None,
+                    );
+                    let shading = docx_rs::Shading::new().color("auto").fill("F0F0F0");
+                    let run = docx_rs::Run::new()
+                        .add_text(code)
+                        .fonts(docx_rs::RunFonts::new().ascii("Consolas"))
+                        .size(20)
+                        .shading(shading);
+                    para = para.add_run(run);
+                    docx = docx.add_paragraph(para);
+                }
+                DocNode::HorizontalRule => {
+                    let run = docx_rs::Run::new().add_text("─".repeat(40)).color("999999");
+                    let para = docx_rs::Paragraph::new()
+                        .indent(None, None, Some(base_indent + hanging_indent), None)
+                        .add_run(run);
+                    docx = docx.add_paragraph(para);
+                }
+            }
+        }
+    }
+    docx
 }
 
 /// Simple base64 decoder (minimal implementation to avoid adding a dependency)

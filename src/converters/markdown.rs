@@ -29,7 +29,7 @@ impl Converter for MarkdownConverter {
         options.extension.math_dollars = true;
         let root = comrak::parse_document(&arena, source, &options);
 
-        let nodes: Vec<DocNode> = root.children().filter_map(parse_doc_node).collect();
+        let nodes: Vec<DocNode> = root.children().filter_map(parse_block_node).collect();
         Ok(Document::new(nodes))
     }
 
@@ -43,7 +43,9 @@ impl Converter for MarkdownConverter {
 }
 
 // ── Parser ────────────────────────────────────────────────────────────────────
-fn parse_doc_node<'a>(node: &'a AstNode<'a>) -> Option<DocNode> {
+
+/// Parse a block-level node from a comrak AST node.
+fn parse_block_node<'a>(node: &'a AstNode<'a>) -> Option<DocNode> {
     match &node.data.borrow().value {
         NodeValue::Heading(h) => {
             let content = collect_inlines(node);
@@ -68,15 +70,15 @@ fn parse_doc_node<'a>(node: &'a AstNode<'a>) -> Option<DocNode> {
             })
         }
         NodeValue::BlockQuote => {
-            let content: Vec<DocNode> = node.children().filter_map(parse_doc_node).collect();
+            // Parse children of the blockquote — they include paragraphs, lists, etc.
+            let content: Vec<DocNode> = node.children().filter_map(parse_block_node).collect();
             Some(DocNode::BlockQuote { content })
         }
         NodeValue::List(list) => {
             let ordered = matches!(list.list_type, ListType::Ordered);
-            let items: Vec<Vec<DocNode>> = node
-                .children()
-                .map(|item_node| item_node.children().filter_map(parse_doc_node).collect())
-                .collect();
+            // Each item_node is an Item which contains Paragraph, List, etc.
+            // We need to handle nested lists by flattening them with indent tracking.
+            let items = parse_list_items(node, ordered);
             Some(DocNode::List { ordered, items })
         }
         NodeValue::Table(_) => {
@@ -106,14 +108,12 @@ fn parse_doc_node<'a>(node: &'a AstNode<'a>) -> Option<DocNode> {
                     code: math.literal.clone(),
                 })
             } else {
-                // 行内数学公式出现在块级位置，作为段落包裹
                 Some(DocNode::Paragraph {
                     content: vec![InlineNode::MathInline(math.literal.clone())],
                 })
             }
         }
-        // 未知或不重要的块级节点（如 FrontMatter、HtmlBlock 等），
-        // 将其子内容作为段落提取，避免信息丢失
+        // Unknown block-level nodes: extract inline content as paragraph
         _ => {
             let content = collect_inlines(node);
             if content.is_empty() {
@@ -124,9 +124,48 @@ fn parse_doc_node<'a>(node: &'a AstNode<'a>) -> Option<DocNode> {
         }
     }
 }
+
+/// Parse list items, handling nested lists by flattening with indent levels.
+fn parse_list_items<'a>(list_node: &'a AstNode<'a>, _ordered: bool) -> Vec<Vec<DocNode>> {
+    let mut items: Vec<Vec<DocNode>> = Vec::new();
+
+    for item_node in list_node.children() {
+        // item_node is an Item node. Its children can be Paragraph, List, etc.
+        let mut item_nodes: Vec<DocNode> = Vec::new();
+
+        for child in item_node.children() {
+            match &child.data.borrow().value {
+                NodeValue::List(nested_list) => {
+                    // Nested list — recursively flatten
+                    let nested_ordered = matches!(nested_list.list_type, ListType::Ordered);
+                    let nested_items = parse_list_items(child, nested_ordered);
+                    for (nest_idx, nested_item) in nested_items.into_iter().enumerate() {
+                        // For the first nested item, merge with current item's content
+                        if nest_idx == 0 && !item_nodes.is_empty() {
+                            item_nodes.extend(nested_item);
+                        } else {
+                            items.push(nested_item);
+                        }
+                    }
+                }
+                _ => {
+                    if let Some(doc_node) = parse_block_node(child) {
+                        item_nodes.push(doc_node);
+                    }
+                }
+            }
+        }
+
+        if !item_nodes.is_empty() {
+            items.push(item_nodes);
+        }
+    }
+
+    items
+}
+
 fn collect_inlines<'a>(node: &'a AstNode<'a>) -> Vec<InlineNode> {
     let mut result = Vec::new();
-    // Clone NodeValue to avoid lifetime issues with nested borrows
     let children: Vec<_> = node.children().collect();
     for child in &children {
         match child.data.borrow().value.clone() {
@@ -152,7 +191,6 @@ fn collect_inlines<'a>(node: &'a AstNode<'a>) -> Vec<InlineNode> {
                 let alt_text = if alt.is_empty() {
                     String::new()
                 } else {
-                    // Extract plain text from inline nodes
                     alt.iter().fold(String::new(), |mut acc, node| {
                         if let InlineNode::Text(t) = node {
                             acc.push_str(t);
@@ -168,12 +206,7 @@ fn collect_inlines<'a>(node: &'a AstNode<'a>) -> Vec<InlineNode> {
                 });
             }
             NodeValue::Math(math) => {
-                if math.display_math {
-                    // Block math inside inline context — wrap as inline fallback
-                    result.push(InlineNode::MathInline(math.literal));
-                } else {
-                    result.push(InlineNode::MathInline(math.literal));
-                }
+                result.push(InlineNode::MathInline(math.literal));
             }
             NodeValue::SoftBreak => result.push(InlineNode::SoftBreak),
             NodeValue::LineBreak => result.push(InlineNode::HardBreak),
@@ -336,7 +369,7 @@ fn render_inlines(inlines: &[InlineNode]) -> String {
             InlineNode::Strikethrough(children) => {
                 output.push_str("~~");
                 output.push_str(&render_inlines(children));
-                output.push_str("~~");
+                output.push_str("~~ ");
             }
             InlineNode::Link { text, url } => {
                 output.push('[');
@@ -354,8 +387,19 @@ fn render_inlines(inlines: &[InlineNode]) -> String {
             InlineNode::InlineImage { id, data, .. } => {
                 output.push_str("![");
                 output.push_str(id);
-                output.push_str("](data:image/png;base64,");
-                output.push_str(data);
+                output.push('(');
+                // Detect if data is already a URL or raw base64
+                if data.starts_with("http://")
+                    || data.starts_with("https://")
+                    || data.starts_with("data:")
+                    || data.starts_with('/')
+                    || data.starts_with("file://")
+                {
+                    output.push_str(data);
+                } else {
+                    output.push_str("data:image/png;base64,");
+                    output.push_str(data);
+                }
                 output.push(')');
             }
         }

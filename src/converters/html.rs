@@ -537,8 +537,21 @@ fn render_inline_nodes(inlines: &[InlineNode]) -> String {
                 width,
                 height,
             } => {
-                output.push_str("<img src=\"data:image/png;base64,");
-                output.push_str(data);
+                output.push_str("<img src=\"");
+                // Detect if data is already a URL/path or raw base64
+                if data.starts_with("http://")
+                    || data.starts_with("https://")
+                    || data.starts_with("data:")
+                    || data.starts_with('/')
+                    || data.starts_with("file://")
+                {
+                    // Already a URL or data URI — use as-is
+                    output.push_str(data);
+                } else {
+                    // Raw base64 data — prepend data URI prefix
+                    output.push_str("data:image/png;base64,");
+                    output.push_str(data);
+                }
                 output.push('"');
                 if let Some(w) = width {
                     output.push_str(&format!(" width=\"{w}\""));
