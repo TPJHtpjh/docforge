@@ -485,11 +485,24 @@ fn inlines_to_runs(inlines: &[InlineNode]) -> Vec<docx_rs::Run> {
                 height,
                 ..
             } => {
-                if let Ok(img_bytes) = base64_decode(data) {
-                    // Width/height from IR are already in EMU (English Metric Units).
-                    // Use directly with a reasonable max to prevent overflow.
-                    let w_emu = width.unwrap_or(5_486_400).min(10_000_000);
-                    let h_emu = height.unwrap_or(3_600_000).min(10_000_000);
+                // `data` may be a data URI ("data:image/png;base64,....") from
+                // HTML/Markdown sources, or raw base64 from DOCX. Strip any
+                // data-URI prefix before decoding, otherwise the prefix's
+                // base64-valid characters corrupt the decoded bytes and
+                // docx-rs cannot detect the image format.
+                let raw_b64 = strip_data_uri_prefix(data);
+                if let Ok(img_bytes) = base64_decode(raw_b64) {
+                    // IR stores dimensions as either pixels (from HTML/Markdown)
+                    // or EMU (from DOCX). Values below 100_000 are treated as
+                    // pixels; convert to EMU (1 px = 9525 EMU at 96 DPI).
+                    let w_emu = width
+                        .map(|v| if v < 100_000 { v * 9525 } else { v })
+                        .unwrap_or(5_486_400)
+                        .min(10_000_000);
+                    let h_emu = height
+                        .map(|v| if v < 100_000 { v * 9525 } else { v })
+                        .unwrap_or(3_600_000)
+                        .min(10_000_000);
                     let pic = docx_rs::Pic::new(&img_bytes).size(w_emu, h_emu);
                     runs.push(docx_rs::Run::new().add_image(pic));
                 } else {
@@ -758,6 +771,17 @@ fn render_list(
         }
     }
     docx
+}
+
+/// Strip a `data:<mime>;base64,` prefix if present, returning the raw base64
+/// payload. If the input is not a data URI, it is returned unchanged.
+fn strip_data_uri_prefix(data: &str) -> &str {
+    if let Some(rest) = data.strip_prefix("data:") {
+        if let Some(idx) = rest.find(";base64,") {
+            return &rest[idx + ";base64,".len()..];
+        }
+    }
+    data
 }
 
 /// Simple base64 decoder (minimal implementation to avoid adding a dependency)
